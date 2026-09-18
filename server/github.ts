@@ -139,3 +139,57 @@ export async function commitFileToGitHub(
     branch: config.branch,
   };
 }
+
+export async function deleteFileFromGitHub(
+  filePath: string,
+  commitMessage: string
+): Promise<{ success: boolean; commitSha?: string | null; notFound?: boolean }> {
+  const config = getGitHubConfig();
+  if (!config) {
+    throw new Error('GitHub configuration missing');
+  }
+
+  const cleanPath = filePath.replace(/^\/+/, '');
+  let existingSha: string | null = null;
+
+  try {
+    const existing = await getFileFromGitHub(cleanPath);
+    if (!existing || !existing.exists || !existing.sha) {
+      return { success: true, notFound: true };
+    }
+    existingSha = existing.sha;
+  } catch {
+    return { success: true, notFound: true };
+  }
+
+  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${cleanPath}`;
+  const body = {
+    message: commitMessage,
+    sha: existingSha,
+    branch: config.branch,
+  };
+
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      Accept: 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'Bangla-Sahitya-CMS/1.0',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.warn(`[GitHub API] Delete failed for ${cleanPath}:`, errText);
+    throw new Error(`GitHub delete failed (${res.status}): ${errText}`);
+  }
+
+  const result = await res.json() as { commit?: { sha?: string } };
+  return {
+    success: true,
+    commitSha: result.commit?.sha || null,
+  };
+}
+

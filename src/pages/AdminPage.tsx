@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useId } from 'react';
+import React, { useState, useEffect, useId, useCallback } from 'react';
 import { 
   Plus, 
   Edit3, 
@@ -18,7 +18,10 @@ import {
   BookOpen,
   Info,
   RefreshCw,
-  Clock
+  Clock,
+  Tag,
+  Image as ImageIcon,
+  Shield
 } from 'lucide-react';
 import { Link, useRouter } from '../utils/router';
 import { Writing, WritingCategory } from '../types';
@@ -27,6 +30,8 @@ import { updateLocalWritings } from '../content/writings';
 
 interface StatusResponse {
   authenticated: boolean;
+  expired?: boolean;
+  remainingSeconds?: number;
   isDefaultPassword?: boolean;
   githubConfigured: boolean;
   repo: string | null;
@@ -42,6 +47,8 @@ interface WritingFormData {
   excerpt: string;
   content: string;
   published: boolean;
+  tags: string;
+  image: string;
 }
 
 const emptyForm: WritingFormData = {
@@ -52,12 +59,21 @@ const emptyForm: WritingFormData = {
   excerpt: '',
   content: '',
   published: true,
+  tags: '',
+  image: '',
 };
 
 export const AdminPage: React.FC = () => {
   const { navigate } = useRouter();
   const passwordInputId = useId();
-  const [token, setToken] = useState<string>(() => sessionStorage.getItem('som_admin_token') || '');
+
+  // Session state handled strictly in volatile React component memory (never in localStorage/sessionStorage)
+  const [token, setToken] = useState<string>('');
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
+  const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
+
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -81,6 +97,154 @@ export const AdminPage: React.FC = () => {
   const [formFeedback, setFormFeedback] = useState<{ type: 'success' | 'error'; message: string; commitSha?: string } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  // Sanitize browser storage on mount to eliminate any residual sensitive tokens
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem('som_admin_token');
+      localStorage.removeItem('som_admin_token');
+      localStorage.removeItem('admin_token');
+    } catch {
+      // Storage access blocked or restricted
+    }
+  }, []);
+
+  // Format seconds to mm:ss
+  const formatRemainingTime = (totalSecs: number): string => {
+    const mins = Math.floor(Math.max(0, totalSecs) / 60);
+    const secs = Math.floor(Math.max(0, totalSecs) % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // Trigger graceful session expiration
+  const handleSessionExpired = useCallback(() => {
+    if (token) {
+      try {
+        fetch('/api/admin/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ token }),
+        }).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+    // Wipe all in-memory data
+    setToken('');
+    setSessionExpiresAt(null);
+    setRemainingSeconds(0);
+    setViewMode('list');
+    setFormData(emptyForm);
+    setFormFeedback(null);
+    setWritings([]);
+    setStatus(null);
+    setLogoutNotice('নিরাপত্তাজনিত কারণে আপনার অ্যাডমিন সেশনের মেয়াদ শেষ হয়েছে। মেমোরি থেকে সেশন নিরাপদে প্রত্যাহার করা হয়েছে। অনুগ্রহ করে পুনরায় প্রবেশ করুন।');
+  }, [token]);
+
+  // Secure Manual Logout
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    const currentToken = token;
+    if (currentToken) {
+      try {
+        await fetch('/api/admin/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+          },
+          body: JSON.stringify({ token: currentToken }),
+        });
+      } catch {
+        // network failure on logout tolerated
+      }
+    }
+    // Purge in-memory states immediately
+    setToken('');
+    setSessionExpiresAt(null);
+    setRemainingSeconds(0);
+    setViewMode('list');
+    setFormData(emptyForm);
+    setFormFeedback(null);
+    setWritings([]);
+    setStatus(null);
+    setIsLoggingOut(false);
+    setLogoutNotice('আপনি সফলভাবে অ্যাডমিন প্যানেল থেকে লগআউট করেছেন। সমস্ত সংবেদনশীল ডেটা মেমোরি থেকে নিরাপদে মুছে ফেলা হয়েছে।');
+  };
+
+  // Keepalive / Extend session
+  const refreshSession = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/admin/auth/keepalive', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.expiresAt) {
+          setSessionExpiresAt(data.expiresAt);
+          setRemainingSeconds(data.remainingSeconds ?? Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000)));
+        }
+      } else if (res.status === 401) {
+        handleSessionExpired();
+      }
+    } catch {
+      // ignore transient network glitch
+    }
+  };
+
+  // Session countdown interval in memory
+  useEffect(() => {
+    if (!token || !sessionExpiresAt) {
+      setRemainingSeconds(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const diff = Math.max(0, Math.floor((sessionExpiresAt - now) / 1000));
+      setRemainingSeconds(diff);
+
+      if (diff <= 0) {
+        handleSessionExpired();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [token, sessionExpiresAt, handleSessionExpired]);
+
+  // User activity tracker: keeps session refreshed while admin is actively working
+  useEffect(() => {
+    if (!token) return;
+
+    let lastPing = Date.now();
+    const handleActivity = () => {
+      const now = Date.now();
+      // Throttle ping to once every 60 seconds
+      if (now - lastPing > 60 * 1000) {
+        lastPing = now;
+        refreshSession();
+      }
+    };
+
+    window.addEventListener('keydown', handleActivity, { passive: true });
+    window.addEventListener('mousedown', handleActivity, { passive: true });
+    window.addEventListener('scroll', handleActivity, { passive: true });
+    window.addEventListener('touchstart', handleActivity, { passive: true });
+
+    return () => {
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('mousedown', handleActivity);
+      window.removeEventListener('scroll', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+    };
+  }, [token]);
+
   // Fetch status and check if token is valid
   const checkStatus = async (authToken?: string) => {
     try {
@@ -93,7 +257,13 @@ export const AdminPage: React.FC = () => {
       if (res.ok) {
         const data = (await res.json()) as StatusResponse;
         setStatus(data);
+        if (data.remainingSeconds !== undefined && data.remainingSeconds > 0) {
+          setRemainingSeconds(data.remainingSeconds);
+          setSessionExpiresAt(Date.now() + data.remainingSeconds * 1000);
+        }
         return data.authenticated;
+      } else if (res.status === 401 && activeToken) {
+        handleSessionExpired();
       }
     } catch {
       // Offline or dev server starting
@@ -102,7 +272,9 @@ export const AdminPage: React.FC = () => {
   };
 
   useEffect(() => {
-    checkStatus();
+    if (token) {
+      checkStatus(token);
+    }
   }, [token]);
 
   // Fetch writings when authenticated
@@ -121,13 +293,10 @@ export const AdminPage: React.FC = () => {
         const data = await res.json();
         if (data.writings && Array.isArray(data.writings)) {
           setWritings(data.writings);
-          // Sync client-side in-memory cache as well
           updateLocalWritings(data.writings);
         }
       } else if (res.status === 401) {
-        // Token invalid or expired
-        setToken('');
-        sessionStorage.removeItem('som_admin_token');
+        handleSessionExpired();
       }
     } catch (err) {
       console.error('Failed to fetch writings:', err);
@@ -149,6 +318,7 @@ export const AdminPage: React.FC = () => {
 
     setAuthLoading(true);
     setAuthError('');
+    setLogoutNotice(null);
 
     try {
       const res = await fetch('/api/admin/auth/login', {
@@ -159,8 +329,11 @@ export const AdminPage: React.FC = () => {
 
       const data = await res.json();
       if (res.ok && data.token) {
+        // Keep in memory ONLY
         setToken(data.token);
-        sessionStorage.setItem('som_admin_token', data.token);
+        const expiry = data.expiresAt || (Date.now() + (data.timeoutSeconds || 1800) * 1000);
+        setSessionExpiresAt(expiry);
+        setRemainingSeconds(data.timeoutSeconds || 1800);
         setPasswordInput('');
         await checkStatus(data.token);
         await fetchWritings(data.token);
@@ -172,14 +345,6 @@ export const AdminPage: React.FC = () => {
     } finally {
       setAuthLoading(false);
     }
-  };
-
-  // Handle Logout
-  const handleLogout = () => {
-    setToken('');
-    sessionStorage.removeItem('som_admin_token');
-    setViewMode('list');
-    setFormData(emptyForm);
   };
 
   // Auto generate slug from Bengali or English title
@@ -222,6 +387,8 @@ export const AdminPage: React.FC = () => {
       excerpt: writing.excerpt || '',
       content: writing.content,
       published: writing.published,
+      tags: Array.isArray(writing.tags) ? writing.tags.join(', ') : '',
+      image: writing.image || '',
     });
     setFormFeedback(null);
     setViewMode('editor');
@@ -245,6 +412,10 @@ export const AdminPage: React.FC = () => {
       ...formData,
       published: publishState,
       slug: formData.slug.trim() || slugify(formData.title),
+      tags: formData.tags.trim()
+        ? formData.tags.split(/[,،]+/).map((t) => t.trim()).filter(Boolean)
+        : undefined,
+      image: formData.image.trim() || undefined,
     };
 
     try {
@@ -256,6 +427,11 @@ export const AdminPage: React.FC = () => {
         },
         body: JSON.stringify(payload),
       });
+
+      if (res.status === 401) {
+        handleSessionExpired();
+        return;
+      }
 
       const data = await res.json();
       if (res.ok && data.success) {
@@ -296,6 +472,8 @@ export const AdminPage: React.FC = () => {
       });
       if (res.ok) {
         await fetchWritings();
+      } else if (res.status === 401) {
+        handleSessionExpired();
       }
     } catch (err) {
       console.error('Toggle publish failed:', err);
@@ -314,6 +492,8 @@ export const AdminPage: React.FC = () => {
       if (res.ok) {
         setDeleteConfirmId(null);
         await fetchWritings();
+      } else if (res.status === 401) {
+        handleSessionExpired();
       }
     } catch (err) {
       console.error('Delete failed:', err);
@@ -355,6 +535,14 @@ export const AdminPage: React.FC = () => {
               নতুন রচনা প্রকাশ, সম্পাদনা ও সংকলন ব্যবস্থাপনার জন্য পাসওয়ার্ড দিন
             </p>
           </div>
+
+          {/* Session Expiration or Logout Notice */}
+          {logoutNotice && (
+            <div className="mb-5 p-3 bg-amber-50/80 border border-amber-200 text-amber-900 text-xs rounded-md flex items-start gap-2.5 leading-relaxed">
+              <Shield className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <span>{logoutNotice}</span>
+            </div>
+          )}
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -399,8 +587,16 @@ export const AdminPage: React.FC = () => {
             </button>
           </form>
 
+          {/* Pure In-Memory Security Assurance Banner */}
+          <div className="mt-5 p-3 bg-white/70 border border-[#DDD6CC] rounded text-[11px] text-[#6F6961] flex items-start gap-2 leading-relaxed">
+            <Shield className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <strong className="text-[#211F1C] font-semibold">ইন-মেমোরি নিরাপত্তা ব্যবস্থা:</strong> ব্রাউজারের কোনো লোকাল স্টোরেজে (localStorage/sessionStorage) টোকেন বা পাসওয়ার্ড রাখা হয় না। নিষ্ক্রিয়তা বা ট্যাব বন্ধের সাথে সাথে সেশন নিরাপদে বিনষ্ট হয়।
+            </div>
+          </div>
+
           {status?.isDefaultPassword && (
-            <div className="mt-6 pt-4 border-t border-[#DDD6CC]/60 text-xs text-[#6F6961] leading-relaxed">
+            <div className="mt-4 pt-3 border-t border-[#DDD6CC]/60 text-xs text-[#6F6961] leading-relaxed">
               <span className="font-semibold text-[#211F1C] block mb-1">প্রথমবার সেটআপ সহায়তা:</span>
               পরিবেশ ভেরিয়েবলে <code className="bg-[#DDD6CC]/40 px-1 py-0.5 rounded">ADMIN_PASSWORD</code> সেট না থাকলে প্রাথমিক ডিফল্ট পাসওয়ার্ড: <code className="bg-[#DDD6CC]/40 px-1 py-0.5 rounded font-mono text-[#7A3E2B]">som-sahitya-admin</code>। Vercel বা হোস্টিং-এর সেটিংস থেকে আপনার নিজস্ব পাসওয়ার্ড নির্ধারণ করুন।
             </div>
@@ -428,23 +624,58 @@ export const AdminPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap">
           <Link
             to="/"
-            className="inline-flex items-center gap-1 text-xs text-[#6F6961] hover:text-[#211F1C] border border-[#DDD6CC] px-2.5 py-1.5 rounded transition-colors bg-white"
+            className="inline-flex items-center gap-1 text-xs text-[#6F6961] hover:text-[#211F1C] border border-[#DDD6CC] px-2.5 py-1.5 rounded transition-colors bg-white shadow-xs"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>মূলপাতায় ফিরুন</span>
           </Link>
+
+          {/* In-Memory Active Session Indicator */}
+          <div
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-[#FAF7F2] border border-[#DDD6CC] text-[#211F1C] text-xs rounded shadow-xs"
+            title="ইন-মেমোরি সক্রিয় সেশন (নিষ্ক্রিয় থাকলে ৩০ মিনিট পর স্বয়ংক্রিয়ভাবে শেষ হবে)"
+          >
+            <Shield className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="hidden sm:inline text-[#6F6961]">সেশন:</span>
+            <span className={`font-mono font-medium ${remainingSeconds <= 120 ? 'text-red-700 font-bold animate-pulse' : 'text-[#7A3E2B]'}`}>
+              {formatRemainingTime(remainingSeconds)}
+            </span>
+          </div>
+
+          {/* Secure Logout Button */}
           <button
             onClick={handleLogout}
-            className="inline-flex items-center gap-1 text-xs text-red-700 hover:text-red-900 border border-red-200 px-2.5 py-1.5 rounded transition-colors bg-red-50/50 cursor-pointer"
+            disabled={isLoggingOut}
+            className="inline-flex items-center gap-1 text-xs text-red-700 hover:text-red-900 border border-red-200 hover:border-red-300 px-3 py-1.5 rounded transition-colors bg-red-50/60 hover:bg-red-100/60 cursor-pointer disabled:opacity-50 shadow-xs font-medium"
+            title="নিরাপদে লগআউট করুন এবং মেমোরি থেকে সেশন টোকেন মুছে ফেলুন"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>লগআউট</span>
+            <span>{isLoggingOut ? 'লগআউট হচ্ছে...' : 'লগআউট'}</span>
           </button>
         </div>
       </div>
+
+      {/* Imminent Session Expiration Warning Banner */}
+      {remainingSeconds > 0 && remainingSeconds <= 120 && (
+        <div className="mb-6 p-3.5 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>
+              <strong>নিষ্ক্রিয়তার সতর্কবার্তা:</strong> আপনার অ্যাডমিন সেশনের মেয়াদ আর মাত্র <strong>{formatRemainingTime(remainingSeconds)}</strong>-এ শেষ হবে।
+            </span>
+          </div>
+          <button
+            onClick={refreshSession}
+            className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-medium transition-colors cursor-pointer self-start sm:self-auto shrink-0 flex items-center gap-1.5 shadow-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>সেশন বাড়ান</span>
+          </button>
+        </div>
+      )}
 
       {/* GitHub Sync Status Banner */}
       <div className="mb-8 p-3.5 bg-white border border-[#DDD6CC] rounded-lg shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
@@ -464,7 +695,7 @@ export const AdminPage: React.FC = () => {
             <div>
               <span className="font-medium text-amber-700 inline-flex items-center gap-1">
                 <AlertCircle className="w-3.5 h-3.5" />
-                লোকাল স্টোরেজ মোড
+                লোকাল ফাইল সিস্টেম মোড
               </span>
               <span className="text-[#6F6961] ml-2">
                 (Vercel/Netlify স্বয়ংক্রিয় রিডিপ্লয়ের জন্য গিটহাব টোকেন কনফিগার করুন)
@@ -636,6 +867,63 @@ export const AdminPage: React.FC = () => {
                 placeholder="পাঠকের জন্য সংক্ষেপিত ভাব বা প্রারম্ভিক পঙ্‌ক্তি..."
                 className="w-full px-3 py-2 text-xs bg-white border border-[#DDD6CC] rounded focus:outline-none focus:border-[#7A3E2B] text-[#211F1C]"
               />
+            </div>
+
+            {/* Tags (Optional) */}
+            <div>
+              <label className="text-xs font-semibold text-[#211F1C] mb-1 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-[#7A3E2B]" />
+                <span>ট্যাগসমূহ (ঐচ্ছিক — কমা দিয়ে আলাদা করুন)</span>
+              </label>
+              <input
+                type="text"
+                value={formData.tags}
+                onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+                placeholder="যেমন: সাহিত্য, প্রেম, বর্ষা, স্মৃতিচারণ"
+                className="w-full px-3 py-2 text-xs bg-white border border-[#DDD6CC] rounded focus:outline-none focus:border-[#7A3E2B] text-[#211F1C]"
+              />
+              {formData.tags.trim() && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {formData.tags.split(/[,،]+/).map((t, idx) => {
+                    const clean = t.trim();
+                    if (!clean) return null;
+                    return (
+                      <span key={idx} className="px-2 py-0.5 bg-[#FAF7F2] border border-[#DDD6CC] text-[#7A3E2B] text-[11px] rounded">
+                        #{clean}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Feature Image URL (Optional) */}
+            <div>
+              <label className="text-xs font-semibold text-[#211F1C] mb-1 flex items-center gap-1.5">
+                <ImageIcon className="w-3.5 h-3.5 text-[#7A3E2B]" />
+                <span>প্রচ্ছদ বা সংশ্লিষ্ট ছবির লিঙ্ক (ঐচ্ছিক)</span>
+              </label>
+              <input
+                type="url"
+                value={formData.image}
+                onChange={(e) => setFormData({ ...formData, image: e.target.value })}
+                placeholder="https://... ছবির ওয়েব লিঙ্ক"
+                className="w-full px-3 py-2 text-xs font-mono bg-white border border-[#DDD6CC] rounded focus:outline-none focus:border-[#7A3E2B] text-[#211F1C]"
+              />
+              {formData.image.trim() && (
+                <div className="mt-2 flex items-center gap-3 p-2.5 bg-[#FAF7F2] border border-[#DDD6CC] rounded">
+                  <img
+                    src={formData.image}
+                    alt="প্রিভিউ"
+                    referrerPolicy="no-referrer"
+                    className="w-16 h-12 object-cover rounded border border-[#DDD6CC]"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                  <span className="text-[11px] text-[#6F6961]">ছবির প্রিভিউ</span>
+                </div>
+              )}
             </div>
 
             {/* Full Bengali Content */}
@@ -828,14 +1116,32 @@ export const AdminPage: React.FC = () => {
                         </span>
                       </div>
 
-                      <h3 className="text-base sm:text-lg font-serif text-[#211F1C] tracking-tight truncate">
-                        {writing.title}
-                      </h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base sm:text-lg font-serif text-[#211F1C] tracking-tight truncate">
+                          {writing.title}
+                        </h3>
+                        {writing.image && (
+                          <span className="shrink-0 text-[10px] text-[#7A3E2B] bg-[#F1ECE4] px-1.5 py-0.5 rounded flex items-center gap-1" title="ছবি সংবলিত">
+                            <ImageIcon className="w-3 h-3" />
+                            <span>ছবি</span>
+                          </span>
+                        )}
+                      </div>
 
                       {writing.excerpt && (
                         <p className="text-xs text-[#6F6961] mt-1 line-clamp-1 font-sans">
                           {writing.excerpt}
                         </p>
+                      )}
+
+                      {writing.tags && writing.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {writing.tags.map((tag, idx) => (
+                            <span key={idx} className="text-[10px] text-[#7A3E2B] bg-[#F8F5EF] border border-[#DDD6CC]/60 px-1.5 py-0.2 rounded">
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
 
