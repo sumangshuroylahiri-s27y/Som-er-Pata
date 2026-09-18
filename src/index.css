@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: 'Kobiguru', 'Noto Serif Bengali', 'SolaimanLipi', 'Siyam Rupali', Georgia, serif;
+  --font-sans: 'Kalpurush', 'Hind Siliguri', 'Anek Bangla', 'Noto Sans Bengali', 'SolaimanLipi', system-ui, -apple-system, sans-serif;
+  
+  --color-warm-bg: #F8F5EF;
+  --color-warm-surface: #F1ECE4;
+  --color-warm-border: #DDD6CC;
+  --color-warm-primary: #211F1C;
+  --color-warm-secondary: #6F6961;
+  --color-warm-accent: #7A3E2B;
+}
+
+/* Fallback font strategies for Kobiguru and Kalpurush */
+@font-face {
+  font-family: 'Kalpurush';
+  src: local('Kalpurush'), local('Kalpurush ANSI');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Kobiguru';
+  src: local('Kobiguru'), local('Kobiguru Normal');
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-size: 16px;
+}
+
+@media (min-width: 640px) {
+  html {
+    font-size: 17px;
+  }
+}
+
+body {
+  background-color: #F8F5EF;
+  color: #211F1C;
+  font-family: 'Kalpurush', 'Hind Siliguri', 'Anek Bangla', 'Noto Sans Bengali', 'SolaimanLipi', system-ui, -apple-system, sans-serif;
+  line-height: 1.85;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings use Kobiguru with Noto Serif Bengali fallback */
+h1, h2, h3, h4, h5, h6, .font-literary-heading {
+  font-family: 'Kobiguru', 'Noto Serif Bengali', 'SolaimanLipi', 'Siyam Rupali', Georgia, serif;
+  font-weight: normal;
+  letter-spacing: -0.01em;
+}
+
+/* Body & UI elements use Kalpurush with Hind Siliguri fallback */
+body, button, input, select, textarea, nav, .font-literary-body {
+  font-family: 'Kalpurush', 'Hind Siliguri', 'Anek Bangla', 'Noto Sans Bengali', 'SolaimanLipi', system-ui, -apple-system, sans-serif;
+}
+
+/* Reading container optimized for Bengali line measure (65-75 characters) */
+.reading-column {
+  width: 100%;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Poetry typography: Preserve line breaks and rhythm between stanzas */
+.poetry-reading-flow {
+  font-family: 'Kobiguru', 'Noto Serif Bengali', serif;
+}
+
+.poetry-reading-flow .markdown-body p {
+  white-space: pre-line;
+  margin-bottom: 2.25rem;
+  line-height: 2.15;
+}
+
+/* Prose typography: Generous paragraph spacing, elegant blockquotes */
+.prose-reading-flow {
+  font-family: 'Kalpurush', 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+}
+
+.prose-reading-flow .markdown-body p {
+  margin-bottom: 1.75rem;
+  line-height: 1.95;
+}
+
+.prose-reading-flow .markdown-body blockquote {
+  border-left: 3px solid #DDD6CC;
+  padding-left: 1.25rem;
+  margin: 1.75rem 0;
+  color: #6F6961;
+  font-family: 'Kobiguru', 'Noto Serif Bengali', serif;
+  font-style: italic;
+}
+
+.prose-reading-flow .markdown-body h2 {
+  font-family: 'Kobiguru', 'Noto Serif Bengali', serif;
+  font-size: 1.6rem;
+  line-height: 1.35;
+  margin-top: 2.25rem;
+  margin-bottom: 1rem;
+  color: #211F1C;
+}
+
+.prose-reading-flow .markdown-body h3 {
+  font-family: 'Kobiguru', 'Noto Serif Bengali', serif;
+  font-size: 1.35rem;
+  line-height: 1.4;
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  color: #211F1C;
+}
+
+.prose-reading-flow .markdown-body ul {
+  list-style-type: disc;
+  margin-left: 1.5rem;
+  margin-bottom: 1.5rem;
+  line-height: 1.85;
+}
+
+.prose-reading-flow .markdown-body ol {
+  list-style-type: decimal;
+  margin-left: 1.5rem;
+  margin-bottom: 1.5rem;
+  line-height: 1.85;
+}
+
+.prose-reading-flow .markdown-body hr {
+  border: none;
+  border-top: 1px solid #DDD6CC;
+  margin: 2.5rem 0;
+}
+
+/* Custom scrollbar matching warm literary aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F8F5EF;
+}
+::-webkit-scrollbar-thumb {
+  background: #DDD6CC;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6F6961;
+}

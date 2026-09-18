@@ -1,0 +1,6 @@
+{
+  "name": "সোমের ডায়েরি",
+  "description": "আসুন, সাহিত্যের চর্চায় মেতে উঠি আমি আপনি।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
